@@ -1,0 +1,17 @@
+flask
+fastapi
+uvicorn
+python-multipart
+chromadb
+sentence-transformers
+rank_bm25
+pypdf
+langchain
+langchain-community
+langchain-chroma
+langchain-huggingface
+requests
+numpy
+python-dotenv
+yfinance
+ta

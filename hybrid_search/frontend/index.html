@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Financial Research Assistant</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI Financial Research Assistant</h1>
+            <p>Precise Document Analysis & Summarization</p>
+        </header>
+
+        <section class="upload-section">
+            <input type="file" id="fileInput" accept=".pdf, .txt">
+            <button onclick="uploadFile()">Upload Document</button>
+            <p id="uploadStatus"></p>
+        </section>
+
+        <section class="search-section">
+            <div class="source-select">
+                <label for="sourceSelect">Source:</label>
+                <select id="sourceSelect">
+                    <option value="">All sources</option>
+                </select>
+            </div>
+            <textarea id="queryInput" placeholder="Ask a complex question about your documents..."></textarea>
+            <button onclick="performSearch()">Search & Analyze</button>
+        </section>
+
+        <section id="resultsSection" class="results-section hidden">
+            <div class="answer-box">
+                <h2>AI Analysis</h2>
+                <div id="aiAnswer" class="markdown-content"></div>
+                
+                <h3>Key Points</h3>
+                <ul id="keyPointsList"></ul>
+                
+                <div class="meta-info">
+                    <span id="confidenceBadge">Confidence: Low</span>
+                </div>
+            </div>
+
+            <div class="sources-box">
+                <h3>Supporting Documents</h3>
+                <div id="sourcesList"></div>
+            </div>
+        </section>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

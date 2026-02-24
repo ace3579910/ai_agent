@@ -1,46 +1,120 @@
 import os
 import pickle
 import numpy as np
-import requests
+import re
 from typing import List, Dict, Any
 from rank_bm25 import BM25Okapi
+from backend.embeddings import get_embedding
 
 # Paths
 DATA_DIR = os.path.join("data")
 BM25_PATH = os.path.join(DATA_DIR, "bm25_index.pkl")
 DOCS_STORE_PATH = os.path.join(DATA_DIR, "docs_store.pkl")
 EMBEDDINGS_PATH = os.path.join(DATA_DIR, "embeddings.pkl")
+_SOURCE_ENTITY_CACHE: Dict[str, str] = {}
+_ENTITY_PATTERN = re.compile(
+    r"([A-Z][A-Za-z0-9&.\-]*(?:\s+[A-Z][A-Za-z0-9&.\-]*){0,6}\s+(?:Inc\.?|Ltd\.?|LLC|Corp\.?|Corporation|plc|PLC))"
+)
 
-# Ollama configuration
-OLLAMA_EMBED_URL = os.getenv("OLLAMA_EMBED_URL", "http://localhost:11434/api/embed")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+
+def _extract_entities(text: str) -> List[str]:
+    if not text:
+        return []
+    matches = _ENTITY_PATTERN.findall(text)
+    if not matches:
+        return []
+
+    banned_fragments = [
+        "nasdaq",
+        "stock market",
+        "securities exchange",
+        "new york stock exchange",
+        "exchange act",
+    ]
+
+    cleaned = []
+    for raw in matches:
+        name = " ".join(raw.split())
+        if not name:
+            continue
+        lower = name.lower()
+        if any(fragment in lower for fragment in banned_fragments):
+            continue
+        # Avoid over-long captures from legal boilerplate.
+        if len(name.split()) > 7:
+            continue
+        cleaned.append(name)
+
+    if not cleaned:
+        return []
+
+    uniq = []
+    for name in cleaned:
+        if name not in uniq:
+            uniq.append(name)
+    return uniq
+
+
+def _extract_entity(text: str) -> str:
+    cleaned = _extract_entities(text)
+    if not cleaned:
+        return ""
+
+    for suffix in ["Inc.", "Inc", "Ltd.", "Ltd", "Corporation", "Corp.", "Corp", "LLC", "PLC", "plc"]:
+        for name in cleaned:
+            if name.endswith(suffix):
+                return name
+
+    return cleaned[0]
+
+
+def _build_source_entity_cache(all_texts: List[str], doc_metadata: List[Dict[str, Any]]) -> Dict[str, str]:
+    global _SOURCE_ENTITY_CACHE
+    if _SOURCE_ENTITY_CACHE:
+        return _SOURCE_ENTITY_CACHE
+
+    source_counts: Dict[str, Dict[str, int]] = {}
+    for idx, text in enumerate(all_texts):
+        md = doc_metadata[idx] if idx < len(doc_metadata) else {}
+        source = str(md.get("source", "")).strip()
+        if not source:
+            continue
+        if source not in source_counts:
+            source_counts[source] = {}
+
+        entities: List[str] = []
+        if isinstance(md, dict):
+            existing = str(md.get("entity", "")).strip()
+            if existing:
+                entities.append(existing)
+        if not entities:
+            entities = _extract_entities(str(text)[:3000])
+
+        for entity in entities:
+            source_counts[source][entity] = source_counts[source].get(entity, 0) + 1
+
+    out: Dict[str, str] = {}
+    for source, counts in source_counts.items():
+        if not counts:
+            continue
+        ranked = sorted(
+            counts.items(),
+            key=lambda kv: (
+                -kv[1],
+                0 if kv[0].endswith("Inc.") else 1,
+                len(kv[0]),
+            ),
+        )
+        out[source] = ranked[0][0]
+
+    _SOURCE_ENTITY_CACHE = out
+    return _SOURCE_ENTITY_CACHE
 
 class Document:
     """Simple document class"""
     def __init__(self, page_content: str, metadata: Dict[str, Any] = None):
         self.page_content = page_content
         self.metadata = metadata or {}
-
-def get_embedding(text: str) -> np.ndarray:
-    """
-    Gets embedding from Ollama API.
-    """
-    try:
-        payload = {
-            "model": EMBEDDING_MODEL,
-            "prompt": text
-        }
-        response = requests.post(OLLAMA_EMBED_URL, json=payload)
-        if response.status_code == 200:
-            result = response.json()
-            embedding = result.get("embedding", [])
-            return np.array(embedding, dtype=np.float32)
-        else:
-            print(f"Ollama embedding error: {response.status_code}")
-            return np.zeros(384, dtype=np.float32)
-    except Exception as e:
-        print(f"Error getting embedding: {e}")
-        return np.zeros(384, dtype=np.float32)
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     """
@@ -61,6 +135,8 @@ def get_vector_results(query: str, k: int = 5, source_filter: str = None) -> Lis
     try:
         # Get query embedding
         query_embedding = get_embedding(query)
+        if len(query_embedding) == 0 or float(np.linalg.norm(query_embedding)) <= 1e-8:
+            return []
         
         # Load stored embeddings and texts
         with open(EMBEDDINGS_PATH, "rb") as f:
@@ -70,10 +146,15 @@ def get_vector_results(query: str, k: int = 5, source_filter: str = None) -> Lis
             data = pickle.load(f)
             all_texts = data.get("texts", [])
             doc_metadata = data.get("metadata", [])
+        source_entity_map = _build_source_entity_cache(all_texts, doc_metadata)
         
         # Compute similarity scores
         scores = []
         for i, embedding in enumerate(stored_embeddings):
+            if embedding is None or len(embedding) == 0:
+                continue
+            if float(np.linalg.norm(embedding)) <= 1e-8:
+                continue
             similarity = cosine_similarity(query_embedding, embedding)
             # optional source filtering
             md = doc_metadata[i] if i < len(doc_metadata) else {}
@@ -81,6 +162,9 @@ def get_vector_results(query: str, k: int = 5, source_filter: str = None) -> Lis
             if source_filter and src != source_filter:
                 continue
             scores.append((i, similarity))
+
+        if not scores:
+            return []
         
         # Get top-k
         top_k_indices = sorted(scores, key=lambda x: x[1], reverse=True)[:k]
@@ -88,9 +172,15 @@ def get_vector_results(query: str, k: int = 5, source_filter: str = None) -> Lis
         results = []
         for idx, score in top_k_indices:
             if idx < len(all_texts):
+                metadata = doc_metadata[idx] if idx < len(doc_metadata) else {}
+                if source_entity_map and isinstance(metadata, dict):
+                    src = str(metadata.get("source", "")).strip()
+                    if src and src in source_entity_map and not metadata.get("entity"):
+                        metadata = dict(metadata)
+                        metadata["entity"] = source_entity_map[src]
                 doc = Document(
                     page_content=all_texts[idx],
-                    metadata=doc_metadata[idx] if idx < len(doc_metadata) else {}
+                    metadata=metadata
                 )
                 results.append((doc, score))
         
@@ -115,6 +205,7 @@ def get_keyword_results(query: str, k: int = 5, source_filter: str = None) -> Li
             data = pickle.load(f)
             all_texts = data.get("texts", [])
             doc_metadata = data.get("metadata", [])
+        source_entity_map = _build_source_entity_cache(all_texts, doc_metadata)
         
         tokenized_query = query.lower().split()
         scores = bm25.get_scores(tokenized_query)
@@ -129,6 +220,11 @@ def get_keyword_results(query: str, k: int = 5, source_filter: str = None) -> Li
                 src = md.get("source")
                 if source_filter and src != source_filter:
                     continue
+                if source_entity_map and isinstance(md, dict):
+                    src_key = str(src).strip() if src else ""
+                    if src_key and src_key in source_entity_map and not md.get("entity"):
+                        md = dict(md)
+                        md["entity"] = source_entity_map[src_key]
 
                 # header boost: if query tokens overlap header tokens, increase score
                 header = (md.get("header") or "").lower()
@@ -196,6 +292,7 @@ def hybrid_search(query: str, k: int = 5, source_filter: str = None) -> List[Dic
         {
             "content": item["doc"].page_content,
             "source": item["doc"].metadata.get("source", "unknown"),
+            "entity": item["doc"].metadata.get("entity", ""),
             "score": float(item["score"])
         }
         for item in top_k

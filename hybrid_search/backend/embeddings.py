@@ -19,14 +19,16 @@ def _parse_embedding_response(resp_json) -> Optional[List[float]]:
             return resp_json["embedding"]
         if "embeddings" in resp_json and isinstance(resp_json["embeddings"], list):
             # sometimes embeddings is a list of vectors
-            first = resp_json["embeddings"][0]
-            if isinstance(first, list):
-                return first
+            if len(resp_json["embeddings"]) > 0:
+                first = resp_json["embeddings"][0]
+                if isinstance(first, list):
+                    return first
         # some apis wrap in data: [{"embedding": [...]}]
         if "data" in resp_json and isinstance(resp_json["data"], list):
-            first = resp_json["data"][0]
-            if isinstance(first, dict) and "embedding" in first:
-                return first["embedding"]
+            if len(resp_json["data"]) > 0:
+                first = resp_json["data"][0]
+                if isinstance(first, dict) and "embedding" in first:
+                    return first["embedding"]
     # sometimes API returns a list directly
     if isinstance(resp_json, list) and len(resp_json) > 0:
         first = resp_json[0]

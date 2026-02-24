@@ -2,9 +2,9 @@ import os
 import pickle
 import shutil
 import numpy as np
-import requests
 import json
 from typing import List, Dict, Any
+from backend.embeddings import get_embedding
 
 # PDF reading
 try:
@@ -22,38 +22,11 @@ EMBEDDINGS_PATH = os.path.join(DATA_DIR, "embeddings.pkl")
 # Ensure data structure exists
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Ollama configuration
-OLLAMA_EMBED_URL = os.getenv("OLLAMA_EMBED_URL", "http://localhost:11434/api/embed")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
-
 class Document:
     """Simple document class"""
     def __init__(self, page_content: str, metadata: Dict[str, Any] = None):
         self.page_content = page_content
         self.metadata = metadata or {}
-
-def get_embedding(text: str) -> np.ndarray:
-    """
-    Gets embedding from Ollama API.
-    """
-    try:
-        payload = {
-            "model": EMBEDDING_MODEL,
-            "prompt": text
-        }
-        response = requests.post(OLLAMA_EMBED_URL, json=payload)
-        if response.status_code == 200:
-            result = response.json()
-            embedding = result.get("embedding", [])
-            return np.array(embedding, dtype=np.float32)
-        else:
-            print(f"Ollama embedding error: {response.status_code}")
-            # Return zero vector as fallback
-            return np.zeros(384, dtype=np.float32)
-    except Exception as e:
-        print(f"Error getting embedding: {e}")
-        # Return zero vector as fallback
-        return np.zeros(384, dtype=np.float32)
 
 def load_pdf(file_path: str) -> str:
     """

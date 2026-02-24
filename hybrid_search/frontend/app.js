@@ -129,7 +129,8 @@ async function performSearch() {
             </div>
         `).join('');
 
-        // Auto-save user query and assistant answer to persistent memory
+        // Auto-save only user query to persistent memory.
+        // Storing assistant answers can create feedback loops on future retrieval.
         try {
             // save user query
             fetch(`${API_URL}/memory/add`, {
@@ -137,13 +138,6 @@ async function performSearch() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content: query, role: 'user' })
             }).catch(e => console.warn('Failed to store user memory', e));
-
-            // save assistant answer
-            fetch(`${API_URL}/memory/add`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: data.answer || '', role: 'assistant' })
-            }).catch(e => console.warn('Failed to store assistant memory', e));
         } catch (e) {
             console.warn('Memory save error', e);
         }

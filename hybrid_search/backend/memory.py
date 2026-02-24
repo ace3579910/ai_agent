@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import pickle
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 import numpy as np
 
@@ -77,7 +77,7 @@ def _load_all() -> List[Dict[str, Any]]:
     return out
 
 
-def query_memory(query: str, k: int = 5) -> List[Dict[str, Any]]:
+def query_memory(query: str, k: int = 5, roles: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """Return top-k relevant memory entries for the given query.
     Each entry contains `content`, `role`, `score`, and `ts`.
     """
@@ -85,19 +85,31 @@ def query_memory(query: str, k: int = 5) -> List[Dict[str, Any]]:
     if not all_mem:
         return []
 
+    role_filter = {str(r).strip().lower() for r in (roles or []) if str(r).strip()}
+    if role_filter:
+        all_mem = [m for m in all_mem if str(m.get("role", "")).strip().lower() in role_filter]
+        if not all_mem:
+            return []
+
     q_emb = get_embedding(query)
+    if len(q_emb) == 0 or float(np.linalg.norm(q_emb)) <= 1e-8:
+        return []
 
     scored = []
     for m in all_mem:
         emb = m.get("embedding")
         if emb is None or len(emb) == 0:
-            score = 0.0
-        else:
-            try:
-                score = float(cosine_similarity(q_emb, emb))
-            except Exception:
-                score = 0.0
+            continue
+        if float(np.linalg.norm(emb)) <= 1e-8:
+            continue
+        try:
+            score = float(cosine_similarity(q_emb, emb))
+        except Exception:
+            continue
         scored.append({"id": m["id"], "role": m["role"], "content": m["content"], "score": score, "ts": m["ts"]})
+
+    if not scored:
+        return []
 
     scored_sorted = sorted(scored, key=lambda x: x["score"], reverse=True)[:k]
     return scored_sorted

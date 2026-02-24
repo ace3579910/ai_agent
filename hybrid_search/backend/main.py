@@ -15,6 +15,22 @@ from fastapi import Request
 import pathlib
 
 app = FastAPI()
+MEMORY_MIN_SCORE = 0.1
+MEMORY_INTENT_KEYWORDS = [
+    "what did i ask",
+    "what did you answer",
+    "previous",
+    "earlier",
+    "before",
+    "remember",
+    "memory",
+    "last question",
+]
+
+
+def _is_memory_query(query: str) -> bool:
+    q = (query or "").strip().lower()
+    return any(token in q for token in MEMORY_INTENT_KEYWORDS)
 
 # Add CORS middleware
 app.add_middleware(
@@ -83,19 +99,27 @@ async def upload_document(file: UploadFile = File(...)):
 @app.post("/query", response_model=AnalyzeResponse)
 async def query_documents(request: QueryRequest):
     try:
-        # 1. Hybrid Search (optional source filter)
-        # retrieve memory entries relevant to the query
-        mem_entries = query_memory(request.query, k=3) or []
+        mem_entries = []
+        if _is_memory_query(request.query):
+            # include memory only for explicit conversational-memory questions
+            mem_entries = query_memory(request.query, k=3, roles=["user", "assistant"]) or []
+            mem_entries = [m for m in mem_entries if float(m.get("score", 0.0)) >= MEMORY_MIN_SCORE]
+
         mem_context = [
-            {"content": m.get("content", ""), "source": "memory", "score": float(m.get("score", 0.0))}
+            {
+                "content": m.get("content", ""),
+                "source": "memory",
+                "role": m.get("role", "user"),
+                "score": float(m.get("score", 0.0)),
+            }
             for m in mem_entries
         ]
 
-        # 1. Hybrid Search (optional source filter)
+        # Hybrid Search (optional source filter)
         doc_context = hybrid_search(request.query, k=5, source_filter=request.source)
 
-        # combine memory + documents (memory first so LLM sees user-specific context)
-        context = mem_context + (doc_context or [])
+        # prioritize source documents over memory notes for factual answers
+        context = (doc_context or []) + mem_context
 
         if not context:
             return {
